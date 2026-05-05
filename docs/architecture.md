@@ -225,10 +225,111 @@ Multi-region is deferred. Cloudflare's global edge mitigates most latency for ca
 - **Railway down (single-platform blast radius):** web, api, Postgres, and Redis all unavailable. This is the explicit cost of consolidation. Mitigation: Better Stack synthetic monitors + status page hosted off-platform; emergency Railway-exit playbook (ADR-0009) keeps a Render/Fly migration achievable in days, not weeks.
 - **Grafana Cloud down:** No application impact; observability blind during outage. Logs/traces/metrics are buffered in OTel SDK queues and flushed on recovery.
 
-## 11. Open Architectural Questions (for ADR-0002+)
+## 11. Local Development Topology
+
+Constitution Principle XIII requires a `docker compose up` path that mirrors production. The local topology supports three modes — canonical, MCP-included, and infra-only — chosen by Compose flags rather than separate orchestration tools.
+
+### 11.1 Topology
+
+```
+  Developer browser  ──▶  http://localhost:3001  (apps/web container)
+                          http://localhost:5001  (apps/api container, optional direct)
+                          http://localhost:3000  (Grafana UI — local LGTM)
+
+  ╔════════════════ Docker Compose (local) ═══════════════════════╗
+  ║                                                               ║
+  ║  ┌───────────────┐                                            ║
+  ║  │  apps/web     │  Next.js (next dev) inside container       ║
+  ║  │  :3001        │  - Better Auth                             ║
+  ║  │  bind-mount   │  - JWKS at http://web:3001/api/auth/jwks   ║
+  ║  │  on src/      │  - Faro disabled or pointed at local LGTM  ║
+  ║  └──────┬────────┘                                            ║
+  ║         │ http://api:5001                                     ║
+  ║         ▼                                                     ║
+  ║  ┌───────────────┐                                            ║
+  ║  │  apps/api     │  .NET (dotnet watch) inside container      ║
+  ║  │  :5001        │  - JwtBearer fetches JWKS from web:3001    ║
+  ║  │  bind-mount   │  - eToro client points at PUBLIC eToro     ║
+  ║  │  on src/      │    API (no mock by default)                ║
+  ║  └───┬──────┬────┘                                            ║
+  ║      │      │                                                 ║
+  ║   ┌──▼─┐  ┌─▼────┐    ┌──────────────┐    ┌──────────────┐   ║
+  ║   │ pg │  │redis │    │ otel-lgtm    │    │ apps/mcp     │   ║
+  ║   │5432│  │6379  │    │ Grafana :3000│    │ (profile=mcp)│   ║
+  ║   └────┘  └──────┘    │ OTLP :4317   │    │ :4000        │   ║
+  ║                       └──────────────┘    └──────────────┘   ║
+  ╚═══════════════════════════════════════════════════════════════╝
+```
+
+All inter-service URLs use Docker's internal DNS (`web:3001`, `api:5001`, `postgres:5432`, `redis:6379`, `otel-lgtm:4317`). Host-port mappings are only for the developer browser and external tools.
+
+### 11.2 The three modes
+
+| Mode               | Command                                              | What runs                                                         | When to use                                                                        |
+|--------------------|------------------------------------------------------|-------------------------------------------------------------------|-------------------------------------------------------------------------------------|
+| **Canonical (default)** | `docker compose up`                              | web, api, postgres, redis, otel-lgtm                              | Day-to-day work. Maximum prod parity. Hot-reload via bind mounts.                  |
+| **MCP-included**   | `docker compose --profile mcp up`                    | Canonical + apps/mcp                                              | Working on the MCP surface, or testing eToro client drift between api and mcp.     |
+| **Infra-only**     | `docker compose up postgres redis otel-lgtm`         | Only stateful + observability services                            | Iterating quickly with `pnpm dev` (web) and `dotnet watch` (api) on the host.       |
+
+The default profile is empty; `apps/mcp` carries `profiles: [mcp]` in `compose.yml` so it only starts when the profile is requested. There is no separate `compose.infra.yml` file — the infra-only mode is a service-list invocation against the same Compose file, which keeps the source of truth single.
+
+### 11.3 Hot reload
+
+Two bind-mount strategies, codified in `compose.yml`:
+
+- **`apps/web`:** mount the repo into the container, run `pnpm dev` as the entrypoint. Next.js handles HMR. The container's `node_modules` are kept inside the container (named volume) so Linux-built modules don't conflict with the developer's host (typically Windows or macOS).
+- **`apps/api`:** mount the repo into the container, run `dotnet watch run` as the entrypoint. .NET hot-reloads on source changes. NuGet caches are kept inside the container.
+
+In infra-only mode, neither bind mount runs — the developer uses `pnpm dev` and `dotnet watch` natively on the host. The host-mode contract is: every service the developer is *not* running natively must be reachable on `localhost:<port>` with the same env-var keys as production.
+
+### 11.4 Auth wiring
+
+Better Auth in `apps/web` exposes a JWKS endpoint at `/api/auth/jwks`. In Compose mode this resolves as `http://web:3001/api/auth/jwks` from the api container. In infra-only mode, the api process running on the host hits `http://localhost:3001/api/auth/jwks`. The .NET API's `JwtBearerOptions.Authority` and `MetadataAddress` are configured exclusively from environment variables — `JWKS_URL` is the contract — so the same code runs in both modes without conditionals.
+
+### 11.5 Local observability
+
+The local OpenTelemetry destination is a **`grafana/otel-lgtm`** container (the official all-in-one distribution: Grafana, Loki, Tempo, Mimir). It exposes:
+- Grafana UI at `http://localhost:3000` (default credentials documented in compose).
+- OTLP/gRPC endpoint at `otel-lgtm:4317` (internal) / `localhost:4317` (host).
+- OTLP/HTTP endpoint at `otel-lgtm:4318` / `localhost:4318`.
+
+`OTLP_ENDPOINT` env var points at `http://otel-lgtm:4318` in compose mode and `http://localhost:4318` in infra-only mode. Production points at the Grafana Cloud OTLP endpoint. Same code, same SDK config, different value — exactly the OTel-as-portability-contract this architecture promises.
+
+Faro Web SDK in `apps/web` uses a feature flag (`FARO_ENABLED`) that defaults to `false` locally to keep the dev console quiet.
+
+### 11.6 Env-var contract
+
+A single `.env.example` at the repo root enumerates every variable the stack needs. Developers copy it to `.env` and override per their machine. Keys are identical across local, CI, and Railway:
+
+| Key                     | Local default                                  | Notes                                              |
+|-------------------------|------------------------------------------------|----------------------------------------------------|
+| `DATABASE_URL`          | `postgres://app:app@postgres:5432/app`         | Vanilla Postgres URL. Same shape in prod.          |
+| `REDIS_URL`             | `redis://redis:6379`                           | Vanilla Redis URL. Same shape in prod.             |
+| `JWKS_URL`              | `http://web:3001/api/auth/jwks`                | Better Auth issues; .NET API consumes.             |
+| `OTLP_ENDPOINT`         | `http://otel-lgtm:4318`                        | Grafana Cloud endpoint in prod.                    |
+| `ETORO_API_BASE`        | `https://www.etoro.com/api/...` (real)         | Local hits real eToro; rate-limit budget is shared with prod when running heavy local traffic. |
+| `BETTER_AUTH_SECRET`    | dev-only random in `.env`                      | Per-developer; never checked in.                   |
+| `FARO_ENABLED`          | `false`                                        | `true` in prod.                                    |
+
+### 11.7 What's intentionally not in local
+
+- **Cloudflare.** No local CDN. The browser hits `apps/web` directly on `localhost:3001`. Cache headers are exercised in prod and preview only.
+- **Railway-specific anything.** No Railway CLI, no Railway env. The whole point.
+- **Grafana Cloud.** Local LGTM only. Sending dev traces to the prod stack is forbidden by Principle XIII.
+- **Synthetic monitoring.** Better Stack is prod-only.
+- **Multi-region.** Not relevant locally.
+
+### 11.8 Limitations vs prod
+
+- ISR / Next.js Data Cache behavior in `next dev` differs from `next start`. For end-to-end cache testing, run `apps/web` with `pnpm build && pnpm start` inside the container — a `compose.prod-mode.yml` overlay (future) will make this a one-line switch.
+- The eToro public API is shared between local and prod. Heavy local load can deplete the same upstream rate-limit budget the prod app uses. Rate-limit middleware in the .NET API includes a local-mode warning when a developer crosses a soft threshold.
+- The local LGTM container does not persist data across `docker compose down -v`. This is intentional — we want clean dashboards each session.
+
+## 12. Open Architectural Questions (for ADR-0002+)
 
 1. JWT lifetime and refresh strategy.
 2. eToro client retry budget tuning under load.
 3. Whether to expose an internal admin API for cache busting.
 4. Snapshotting cadence and retention for `app.portfolio_snapshots`.
 5. Whether the MCP server should eventually call `apps/api` instead of eToro directly (would unify caching but reintroduces the coupling we explicitly avoided in v1).
+6. Whether to add a `compose.prod-mode.yml` overlay that runs `next start` and a Release-build .NET binary for cache and perf testing, and how its output should diverge from canonical local mode.

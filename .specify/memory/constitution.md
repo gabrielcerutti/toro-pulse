@@ -1,6 +1,6 @@
 # Project Constitution
 
-**Version:** 1.1.0
+**Version:** 1.2.0
 **Ratified:** 2026-04-30
 **Last amended:** 2026-04-30
 **Owner:** Gabriel Cerutti
@@ -95,7 +95,7 @@ We host on a consolidated platform (Railway in v1) for operational simplicity, b
 - **Docker is the only deployment unit.** Every service ships from a `Dockerfile` checked into the repo. No reliance on platform-specific buildpacks (Nixpacks, Heroku-style detection, Vercel build steps) for production builds.
 - **Service discovery via standard env vars only.** `DATABASE_URL`, `REDIS_URL`, `OTLP_ENDPOINT`, etc. No platform-specific service references baked into application code.
 - **Secrets via environment variables.** Platform-specific secret APIs are wrapped behind a thin abstraction or avoided.
-- **Local parity.** `docker compose up` from the repo root must run the full stack (web, api, mcp, postgres, redis) using the same images that deploy to production.
+- **Local parity.** A canonical `docker compose up` from the repo root must run the application's default-on services (web, api, postgres, redis, plus a local observability container) using the same images that deploy to production. Optional services (e.g., the MCP sibling) live behind opt-in Compose profiles. An infra-only mode (Compose invoked with only the stateful + observability services) must also be supported so developers can run web and api on the host when iterating quickly. Local dev must never depend on a network round-trip to a production-tier vendor: a local Grafana LGTM container — not Grafana Cloud — is the local observability backend.
 - **Database is vanilla Postgres, cache is vanilla Redis.** No platform-specific extensions, no platform-specific managed features baked into schema or queries.
 - **Observability is OTLP-only.** No platform-native log/metric APIs.
 
@@ -111,3 +111,4 @@ We host on a consolidated platform (Railway in v1) for operational simplicity, b
 |---------|------------|-------------------------------------------------------------------|
 | 1.0.0   | 2026-04-30 | Initial ratification.                                             |
 | 1.1.0   | 2026-04-30 | Added Principle XIII — Platform-Agnostic Deployment Discipline.   |
+| 1.2.0   | 2026-04-30 | Refined Principle XIII local-parity clause: canonical compose, opt-in profiles, infra-only mode, local LGTM. |

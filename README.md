@@ -73,6 +73,36 @@ etoro-app/
 
 ---
 
+## Running Locally
+
+Per **Constitution Principle XIII**, every developer can bring up the full stack on their machine with Docker Compose. There are three modes, all driven by a single `compose.yml` at the repo root (no separate compose files).
+
+| Mode | Command | What runs |
+|------|---------|-----------|
+| **Canonical (default)** | `docker compose up` | web, api, postgres, redis, otel-lgtm |
+| **MCP-included** | `docker compose --profile mcp up` | Canonical + apps/mcp |
+| **Infra-only** | `docker compose up postgres redis otel-lgtm` | Just the stateful + observability services — for use when running web/api on the host with `pnpm dev` and `dotnet watch` |
+
+Once the canonical mode is up:
+
+- Web app: <http://localhost:3001>
+- API: <http://localhost:5001>
+- Grafana (local LGTM observability): <http://localhost:3000>
+- Postgres: `localhost:5432` (user/password documented in `.env.example`)
+- Redis: `localhost:6379`
+
+Hot reload is on by default — Next.js HMR for the web tier, `dotnet watch` for the API. Source is bind-mounted into the containers.
+
+**Local observability is fully self-contained.** A `grafana/otel-lgtm` container hosts Loki, Tempo, Mimir, and Grafana — no traffic leaves your machine. Production sends OTLP to Grafana Cloud; local sends OTLP to `otel-lgtm:4318`. Only the `OTLP_ENDPOINT` env var changes.
+
+**Local hits the real eToro public API.** There is no mock by default. Heavy local loops share the upstream rate-limit budget with production — tread accordingly. A future ADR may add a record/replay or fixture-mode toggle.
+
+**Limitations vs. production:** no Cloudflare, no Railway, no synthetic monitors, no multi-region. ISR/cache behavior in `next dev` differs from `next start` — for end-to-end cache testing, build the production image locally and run it.
+
+Full topology, env-var contract, and edge cases live in [`docs/architecture.md`](./docs/architecture.md) §11 "Local Development Topology."
+
+---
+
 ## Bootstrap (one-time)
 
 The Constitution and first spec are already in place. The next steps are:
