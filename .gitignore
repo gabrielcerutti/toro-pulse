@@ -1,0 +1,65 @@
+# --- Secrets (Constitution VII) ---
+# Secrets live in the deployment platform's secret store, never in repo.
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+*.pfx
+
+# --- Claude Code local state (per-developer; never commit) ---
+.claude/settings.local.json
+.claude/.credentials.json
+.claude/projects/
+.claude/todos/
+.claude/shell-snapshots/
+.claude/statsig/
+.claude/ide/
+
+# --- Node / Next.js (apps/web, packages/*) ---
+node_modules/
+.pnpm-store/
+.next/
+out/
+dist/
+build/
+*.tsbuildinfo
+coverage/
+.turbo/
+.vercel/
+
+# --- .NET (apps/api) ---
+bin/
+obj/
+*.user
+*.suo
+*.userprefs
+*.cache
+.vs/
+.idea/
+TestResults/
+*.coverage
+*.coveragexml
+
+# --- Playwright / test artifacts ---
+playwright-report/
+playwright/.cache/
+test-results/
+
+# --- Docker / local dev ---
+.docker/
+docker-compose.override.yml
+
+# --- Editor / OS ---
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*.swo
+*~
+
+# --- Logs ---
+*.log
+logs/
+npm-debug.log*
+pnpm-debug.log*
